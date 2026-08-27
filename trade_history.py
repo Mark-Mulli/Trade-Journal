@@ -15,13 +15,15 @@ if deals is None:
     raise SystemExit
 
 
-for deal in deals:
-    print("Deal Ticket\n")
-    print(deal.ticket)
-    print(deal.position_id)
-    print(deal.symbol)
-    print(deal.volume)
-    print(deal.price)
-    print(deal.profit)
+for index, deal in enumerate(deals):
+    print("\nDeal Ticket", index)
+    print("Deal Ticket: ", deal.ticket)
+    print("Position ID: ", deal.position_id)
+    print("Symbol: ", deal.symbol)
+    print("Volume: ", deal.volume)
+    print("Price: ", deal.price)
+    print("Profit: ", deal.profit)
+    
 
 mt5.shutdown()
+
