@@ -1,11 +1,16 @@
 import MetaTrader5 as mt5
 
-if not mt5.initialize():
-    print("MT5 connection failed:", mt5.last_error())
-    raise SystemExit
+def initialize_mt5():
+    if not mt5.initialize():
+        print("MT5 connection failed:", mt5.last_error())
+        raise SystemExit
 
-account = mt5.account_info()
+    account = mt5.account_info()
+    print("Connected account:", account.login)
+    print("Balance:", account.balance)
+    print("Equity:", account.equity)
+    return account
 
-print("Connected account:", account.login)
-print("Balance:", account.balance)
-print("Equity:", account.equity)
+
+if __name__ == "__main__":
+    initialize_mt5()
