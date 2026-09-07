@@ -1,10 +1,17 @@
-import json
 import time
 from typing import Dict, Iterable
 
 import MetaTrader5 as mt5
 import pandas as pd
 
+from analytics import (
+    calculate_initial_risk_reward,
+    holding_metrics,
+    local_time_features,
+    outcome_label,
+    session_label,
+)
+from config import ANALYTICS_TIMEZONE, SESSION_TIMEZONE, SESSION_WINDOWS
 from database import get_state, set_state
 
 BUY = getattr(mt5, "DEAL_TYPE_BUY", 0)
@@ -18,7 +25,7 @@ ENTRY_OUT_BY = getattr(mt5, "DEAL_ENTRY_OUT_BY", 3)
 def now_msc() -> int:
     return int(time.time() * 1000)
 
-# MetaTrader5 connect and account info retrieval
+
 def connect_mt5():
     if not mt5.initialize():
         raise RuntimeError(f"MT5 initialize failed: {mt5.last_error()}")
@@ -221,7 +228,7 @@ def rebuild_trades(conn, account_login: int, open_position_ids) -> int:
     position_rows = conn.execute(
         """
         SELECT DISTINCT position_id
-        FROM executions 
+        FROM executions
         WHERE account_login=? AND position_id > 0 AND deal_type IN (?, ?)
         """,
         (account_login, BUY, SELL),
@@ -229,6 +236,7 @@ def rebuild_trades(conn, account_login: int, open_position_ids) -> int:
 
     updated = 0
     open_ids = set(int(x) for x in open_position_ids)
+    current_now_msc = now_msc()
 
     for pr in position_rows:
         position_id = int(pr["position_id"])
@@ -249,8 +257,8 @@ def rebuild_trades(conn, account_login: int, open_position_ids) -> int:
         exit_rows = [r for r in trade_rows if int(r["entry_type"]) in (ENTRY_OUT, ENTRY_OUT_BY)]
         reverse_rows = [r for r in trade_rows if int(r["entry_type"]) == ENTRY_INOUT]
 
-        # Hedging accounts normally use ENTRY_IN/ENTRY_OUT. For netting reversals,
-        # this foundation flags the lifecycle but does not split one reversal into two ideas.
+        # Hedging accounts normally use ENTRY_IN/ENTRY_OUT. Netting reversals
+        # still require custom trade-idea splitting for perfect journaling.
         if not entry_rows and reverse_rows:
             entry_rows = [reverse_rows[0]]
 
@@ -259,13 +267,15 @@ def rebuild_trades(conn, account_login: int, open_position_ids) -> int:
 
         first_entry = entry_rows[0]
         direction = "LONG" if int(first_entry["deal_type"]) == BUY else "SHORT"
-        symbol = first_entry["symbol"]
+        symbol = str(first_entry["symbol"])
         entry_price = _weighted_average(entry_rows)
         exit_price = _weighted_average(exit_rows) if exit_rows else None
         entry_volume = sum(float(r["volume"]) for r in entry_rows)
         closed_volume = sum(float(r["volume"]) for r in exit_rows)
         entry_time = min(int(r["time_msc"]) for r in entry_rows)
         exit_time = max((int(r["time_msc"]) for r in exit_rows), default=None)
+        initial_sl = float(first_entry["sl"] or 0.0)
+        initial_tp = float(first_entry["tp"] or 0.0)
 
         gross_pnl = sum(float(r["profit"] or 0.0) for r in rows)
         commission = sum(float(r["commission"] or 0.0) for r in rows)
@@ -278,14 +288,76 @@ def rebuild_trades(conn, account_login: int, open_position_ids) -> int:
             exit_time = None
             exit_price = None if not exit_rows else exit_price
 
+        existing = conn.execute(
+            """
+            SELECT risk_amount, planned_reward_amount, planned_rr, risk_status,
+                   risk_calculated_at_msc, risk_calc_context
+            FROM trades
+            WHERE account_login=? AND position_id=?
+            """,
+            (account_login, position_id),
+        ).fetchone()
+
+        existing_risk = float(existing["risk_amount"]) if existing and existing["risk_amount"] is not None else None
+        if existing_risk is not None:
+            risk_amount = existing_risk
+            planned_reward_amount = existing["planned_reward_amount"]
+            planned_rr = existing["planned_rr"]
+            risk_status = existing["risk_status"]
+            risk_calculated_at = existing["risk_calculated_at_msc"]
+            risk_calc_context = existing["risk_calc_context"]
+        else:
+            risk = calculate_initial_risk_reward(
+                mt5,
+                symbol=symbol,
+                direction=direction,
+                volume=entry_volume,
+                entry_price=float(entry_price),
+                initial_sl=initial_sl,
+                initial_tp=initial_tp,
+                multi_entry=len(entry_rows) > 1,
+            )
+            risk_amount = risk["risk_amount"]
+            planned_reward_amount = risk["planned_reward_amount"]
+            planned_rr = risk["planned_rr"]
+            risk_status = risk["risk_status"]
+            risk_calculated_at = current_now_msc if risk_amount is not None else None
+            age_minutes = max(0.0, (current_now_msc - entry_time) / 60000.0)
+            risk_calc_context = (
+                "NEAR_ENTRY_CURRENT_ENV" if age_minutes <= 10 else "HISTORICAL_RECONSTRUCTION_CURRENT_ENV"
+            ) if risk_amount is not None else None
+
+        holding_seconds, holding_minutes = holding_metrics(
+            entry_time, exit_time, current_now_msc
+        )
+        local = local_time_features(entry_time, ANALYTICS_TIMEZONE)
+        entry_session = session_label(
+            entry_time, SESSION_TIMEZONE, SESSION_WINDOWS
+        )
+        outcome = outcome_label(status, net_pnl)
+        r_multiple = (
+            net_pnl / risk_amount
+            if status == "CLOSED" and risk_amount not in (None, 0)
+            else None
+        )
+
         conn.execute(
             """
             INSERT INTO trades (
                 account_login, position_id, symbol, direction,
                 entry_time_msc, exit_time_msc, entry_price, exit_price,
                 entry_volume, closed_volume, initial_sl, initial_tp,
-                gross_pnl, commission, swap, fee, net_pnl, status, updated_at_msc
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                gross_pnl, commission, swap, fee, net_pnl, status,
+                risk_amount, planned_reward_amount, planned_rr, r_multiple,
+                risk_status, risk_calculated_at_msc, risk_calc_context,
+                holding_seconds, holding_minutes,
+                entry_datetime_local, entry_date, entry_weekday, entry_month,
+                entry_year, entry_hour, entry_session, outcome,
+                analytics_timezone, session_timezone, updated_at_msc
+            ) VALUES (
+                ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+            )
             ON CONFLICT(account_login, position_id) DO UPDATE SET
                 symbol=excluded.symbol,
                 direction=excluded.direction,
@@ -303,15 +375,42 @@ def rebuild_trades(conn, account_login: int, open_position_ids) -> int:
                 fee=excluded.fee,
                 net_pnl=excluded.net_pnl,
                 status=excluded.status,
+                risk_amount=COALESCE(trades.risk_amount, excluded.risk_amount),
+                planned_reward_amount=COALESCE(trades.planned_reward_amount, excluded.planned_reward_amount),
+                planned_rr=COALESCE(trades.planned_rr, excluded.planned_rr),
+                r_multiple=excluded.r_multiple,
+                risk_status=CASE
+                    WHEN trades.risk_amount IS NOT NULL THEN trades.risk_status
+                    ELSE excluded.risk_status
+                END,
+                risk_calculated_at_msc=COALESCE(trades.risk_calculated_at_msc, excluded.risk_calculated_at_msc),
+                risk_calc_context=COALESCE(trades.risk_calc_context, excluded.risk_calc_context),
+                holding_seconds=excluded.holding_seconds,
+                holding_minutes=excluded.holding_minutes,
+                entry_datetime_local=excluded.entry_datetime_local,
+                entry_date=excluded.entry_date,
+                entry_weekday=excluded.entry_weekday,
+                entry_month=excluded.entry_month,
+                entry_year=excluded.entry_year,
+                entry_hour=excluded.entry_hour,
+                entry_session=excluded.entry_session,
+                outcome=excluded.outcome,
+                analytics_timezone=excluded.analytics_timezone,
+                session_timezone=excluded.session_timezone,
                 updated_at_msc=excluded.updated_at_msc
             """,
             (
                 account_login, position_id, symbol, direction,
                 entry_time, exit_time, entry_price, exit_price,
-                entry_volume, closed_volume,
-                float(first_entry["sl"] or 0.0), float(first_entry["tp"] or 0.0),
-                gross_pnl, commission, swap, fee, net_pnl,
-                status, now_msc(),
+                entry_volume, closed_volume, initial_sl, initial_tp,
+                gross_pnl, commission, swap, fee, net_pnl, status,
+                risk_amount, planned_reward_amount, planned_rr, r_multiple,
+                risk_status, risk_calculated_at, risk_calc_context,
+                holding_seconds, holding_minutes,
+                local["entry_datetime_local"], local["entry_date"],
+                local["entry_weekday"], local["entry_month"],
+                local["entry_year"], local["entry_hour"], entry_session, outcome,
+                ANALYTICS_TIMEZONE, SESSION_TIMEZONE, current_now_msc,
             ),
         )
         updated += 1
@@ -347,5 +446,7 @@ def export_csvs(conn, account_login: int, export_dir) -> None:
         df = pd.read_sql_query(query, conn, params=(account_login,))
         for col in [c for c in df.columns if c.endswith("_msc")]:
             if not df.empty:
-                df[col.replace("_msc", "_datetime")] = pd.to_datetime(df[col], unit="ms", utc=True)
+                df[col.replace("_msc", "_datetime_utc")] = pd.to_datetime(
+                    df[col], unit="ms", utc=True, errors="coerce"
+                )
         df.to_csv(export_dir / f"{name}.csv", index=False)

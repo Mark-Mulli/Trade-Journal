@@ -2,6 +2,29 @@ import sqlite3
 from pathlib import Path
 
 
+STAGE_B_TRADE_COLUMNS = {
+    "risk_amount": "REAL",
+    "planned_reward_amount": "REAL",
+    "planned_rr": "REAL",
+    "r_multiple": "REAL",
+    "risk_status": "TEXT",
+    "risk_calculated_at_msc": "INTEGER",
+    "risk_calc_context": "TEXT",
+    "holding_seconds": "INTEGER",
+    "holding_minutes": "REAL",
+    "entry_datetime_local": "TEXT",
+    "entry_date": "TEXT",
+    "entry_weekday": "TEXT",
+    "entry_month": "TEXT",
+    "entry_year": "INTEGER",
+    "entry_hour": "INTEGER",
+    "entry_session": "TEXT",
+    "outcome": "TEXT",
+    "analytics_timezone": "TEXT",
+    "session_timezone": "TEXT",
+}
+
+
 def connect(db_path: Path) -> sqlite3.Connection:
     db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(db_path)
@@ -9,6 +32,13 @@ def connect(db_path: Path) -> sqlite3.Connection:
     conn.execute("PRAGMA journal_mode=WAL;")
     conn.execute("PRAGMA foreign_keys=ON;")
     return conn
+
+
+def _ensure_columns(conn: sqlite3.Connection, table: str, columns: dict) -> None:
+    existing = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+    for name, sql_type in columns.items():
+        if name not in existing:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {sql_type}")
 
 
 def init_db(conn: sqlite3.Connection) -> None:
@@ -127,6 +157,9 @@ def init_db(conn: sqlite3.Connection) -> None:
         );
         """
     )
+
+    # Non-destructive migration from Stage A to Stage B.
+    _ensure_columns(conn, "trades", STAGE_B_TRADE_COLUMNS)
     conn.commit()
 
 

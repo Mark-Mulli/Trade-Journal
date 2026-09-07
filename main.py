@@ -4,12 +4,14 @@ import MetaTrader5 as mt5
 
 from config import (
     ACCOUNT_SNAPSHOT_SECONDS,
+    ANALYTICS_TIMEZONE,
     BACKFILL_DAYS,
     DB_PATH,
     EXPORT_DIR,
     EXPORT_SECONDS,
     OVERLAP_SECONDS,
     POLL_SECONDS,
+    SESSION_TIMEZONE,
 )
 from database import connect, init_db
 from journal import (
@@ -32,16 +34,18 @@ def main():
     mode = account_mode_name(int(account.margin_mode))
 
     print("=" * 70)
-    print("MT5 TRADE JOURNAL - READ ONLY")
-    print(f"Account: {account_login}")
-    print(f"Server:  {account.server}")
-    print(f"Currency:{account.currency}")
-    print(f"Mode:    {mode}")
-    print(f"DB:      {DB_PATH}")
+    print("MT5 TRADE JOURNAL - STAGE B - READ ONLY")
+    print(f"Account:   {account_login}")
+    print(f"Server:    {account.server}")
+    print(f"Currency:  {account.currency}")
+    print(f"Mode:      {mode}")
+    print(f"Analytics: {ANALYTICS_TIMEZONE}")
+    print(f"Sessions:  {SESSION_TIMEZONE}")
+    print(f"DB:        {DB_PATH}")
     print("=" * 70)
 
     if mode != "RETAIL_HEDGING":
-        print("WARNING: This foundation aggregates one MT5 position lifecycle per row.")
+        print("WARNING: This version aggregates one MT5 position lifecycle per row.")
         print("Netting/reversal accounts need custom trade-idea splitting for perfect journaling.")
 
     last_snapshot = 0.0
@@ -50,7 +54,6 @@ def main():
     try:
         while True:
             try:
-                # Refresh account object and ensure the terminal remains connected.
                 account = mt5.account_info()
                 if account is None:
                     raise RuntimeError(f"account_info failed: {mt5.last_error()}")
@@ -73,7 +76,6 @@ def main():
 
             except Exception as exc:
                 print(f"Cycle error: {exc}")
-                # Attempt a clean reconnect on the next pass.
                 mt5.shutdown()
                 time.sleep(2)
                 if not mt5.initialize():
