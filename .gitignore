@@ -20,6 +20,7 @@ exports/
 lib/
 lib64/
 parts/
+reports/
 sdist/
 var/
 wheels/
