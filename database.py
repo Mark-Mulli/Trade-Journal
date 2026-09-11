@@ -24,13 +24,26 @@ STAGE_B_TRADE_COLUMNS = {
     "session_timezone": "TEXT",
 }
 
+# Stage D appends user-owned annotation fields to the END of the trades table.
+# Stage B/C column positions therefore remain unchanged.
+STAGE_D_TRADE_COLUMNS = {
+    "grade": "TEXT",
+    "rule_violation": "TEXT",
+    "rule_violation_type": "TEXT",
+    "entry_thesis": "TEXT",
+    "emotion": "TEXT",
+    "primary_screenshot_path": "TEXT",
+    "annotation_updated_at_msc": "INTEGER",
+}
+
 
 def connect(db_path: Path) -> sqlite3.Connection:
     db_path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(db_path)
+    conn = sqlite3.connect(db_path, timeout=10)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL;")
     conn.execute("PRAGMA foreign_keys=ON;")
+    conn.execute("PRAGMA busy_timeout=10000;")
     return conn
 
 
@@ -155,11 +168,44 @@ def init_db(conn: sqlite3.Connection) -> None:
             state_value TEXT,
             PRIMARY KEY (account_login, state_key)
         );
+
+        CREATE TABLE IF NOT EXISTS trade_annotation_history (
+            revision_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            account_login INTEGER NOT NULL,
+            position_id INTEGER NOT NULL,
+            saved_at_msc INTEGER NOT NULL,
+            strategy TEXT,
+            setup TEXT,
+            grade TEXT,
+            rule_violation TEXT,
+            rule_violation_type TEXT,
+            entry_thesis TEXT,
+            emotion TEXT,
+            notes TEXT
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_annotation_history_trade
+            ON trade_annotation_history(account_login, position_id, saved_at_msc);
+
+        CREATE TABLE IF NOT EXISTS trade_screenshots (
+            screenshot_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            account_login INTEGER NOT NULL,
+            position_id INTEGER NOT NULL,
+            captured_at_msc INTEGER NOT NULL,
+            file_path TEXT NOT NULL,
+            source TEXT,
+            caption TEXT,
+            is_primary INTEGER NOT NULL DEFAULT 0
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_trade_screenshots_trade
+            ON trade_screenshots(account_login, position_id, captured_at_msc);
         """
     )
 
-    # Non-destructive migration from Stage A to Stage B.
+    # Non-destructive migrations from Stage A -> B -> D.
     _ensure_columns(conn, "trades", STAGE_B_TRADE_COLUMNS)
+    _ensure_columns(conn, "trades", STAGE_D_TRADE_COLUMNS)
     conn.commit()
 
 

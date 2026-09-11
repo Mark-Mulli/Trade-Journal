@@ -34,7 +34,7 @@ def main():
     mode = account_mode_name(int(account.margin_mode))
 
     print("=" * 70)
-    print("MT5 TRADE JOURNAL - STAGE B - READ ONLY")
+    print("MT5 TRADE JOURNAL - STAGE D - BROKER READ ONLY")
     print(f"Account:   {account_login}")
     print(f"Server:    {account.server}")
     print(f"Currency:  {account.currency}")

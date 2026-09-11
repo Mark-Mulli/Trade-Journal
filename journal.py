@@ -441,6 +441,8 @@ def export_csvs(conn, account_login: int, export_dir) -> None:
         "executions": "SELECT * FROM executions WHERE account_login=? ORDER BY time_msc, deal_ticket",
         "position_events": "SELECT * FROM position_events WHERE account_login=? ORDER BY event_time_msc, event_id",
         "account_snapshots": "SELECT * FROM account_snapshots WHERE account_login=? ORDER BY time_msc",
+        "trade_annotation_history": "SELECT * FROM trade_annotation_history WHERE account_login=? ORDER BY saved_at_msc, revision_id",
+        "trade_screenshots": "SELECT * FROM trade_screenshots WHERE account_login=? ORDER BY captured_at_msc, screenshot_id",
     }
     for name, query in tables.items():
         df = pd.read_sql_query(query, conn, params=(account_login,))
