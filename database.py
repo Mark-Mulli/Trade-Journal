@@ -25,7 +25,6 @@ STAGE_B_TRADE_COLUMNS = {
 }
 
 # Stage D appends user-owned annotation fields to the END of the trades table.
-# Stage B/C column positions therefore remain unchanged.
 STAGE_D_TRADE_COLUMNS = {
     "grade": "TEXT",
     "rule_violation": "TEXT",
@@ -34,6 +33,30 @@ STAGE_D_TRADE_COLUMNS = {
     "emotion": "TEXT",
     "primary_screenshot_path": "TEXT",
     "annotation_updated_at_msc": "INTEGER",
+}
+
+# Stage E appends advanced, rebuildable analytics. Existing Stage C/D column
+# positions remain unchanged.
+STAGE_E_TRADE_COLUMNS = {
+    "mfe_price": "REAL",
+    "mae_price": "REAL",
+    "mfe_price_distance": "REAL",
+    "mae_price_distance": "REAL",
+    "mfe_r": "REAL",
+    "mae_r": "REAL",
+    "mfe_amount_est": "REAL",
+    "mae_amount_est": "REAL",
+    "capture_efficiency_pct": "REAL",
+    "giveback_r": "REAL",
+    "risk_used_pct": "REAL",
+    "planned_tp_touched": "TEXT",
+    "initial_sl_touched": "TEXT",
+    "mfe_time_msc": "INTEGER",
+    "mae_time_msc": "INTEGER",
+    "excursion_tick_count": "INTEGER",
+    "excursion_status": "TEXT",
+    "excursion_calculated_at_msc": "INTEGER",
+    "excursion_calc_context": "TEXT",
 }
 
 
@@ -203,9 +226,10 @@ def init_db(conn: sqlite3.Connection) -> None:
         """
     )
 
-    # Non-destructive migrations from Stage A -> B -> D.
+    # Non-destructive migrations from Stage A -> B -> D -> E.
     _ensure_columns(conn, "trades", STAGE_B_TRADE_COLUMNS)
     _ensure_columns(conn, "trades", STAGE_D_TRADE_COLUMNS)
+    _ensure_columns(conn, "trades", STAGE_E_TRADE_COLUMNS)
     conn.commit()
 
 

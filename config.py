@@ -44,3 +44,15 @@ DEFAULT_SETUPS = [
 GRADE_OPTIONS = ["A+", "A", "B", "C", "D"]
 EMOTION_OPTIONS = ["Calm", "Confident", "Neutral", "Hesitant", "Anxious", "FOMO", "Revenge"]
 RECENT_TRADE_LIMIT = 150
+
+# Stage E advanced analytics ------------------------------------------------
+# Tick history is processed in chunks to avoid loading very large arrays.
+EXCURSION_TICK_CHUNK_HOURS = 6
+# Automatic MAE/MFE processing applies to trades that close after Stage E is
+# first activated. Use backfill_excursions.py for older closed trades.
+AUTO_EXCURSION_BATCH = 2
+# Generate summary CSVs periodically for Excel/Power BI.
+ADVANCED_REPORT_SECONDS = 60
+ROLLING_WINDOW_TRADES = 20
+# A small minimum sample threshold used only as a descriptive flag in reports.
+MIN_SAMPLE_TRADES = 20
