@@ -48,7 +48,7 @@ def main():
         stage_e_started = int(stage_e_started)
 
     print("=" * 70)
-    print("MT5 TRADE JOURNAL - BROKER READ ONLY")
+    print("MT5 TRADE JOURNAL - STAGE E - BROKER READ ONLY")
     print(f"Account:   {account_login}")
     print(f"Server:    {account.server}")
     print(f"Currency:  {account.currency}")
@@ -75,7 +75,7 @@ def main():
 
                 new_deals = sync_deals(conn, account_login, BACKFILL_DAYS, OVERLAP_SECONDS)
                 current_positions = sync_positions_and_events(conn, account_login)
-                rebuild_trades(conn, account_login, current_positions.keys())
+                rebuild_trades(conn, account_login, current_positions)
 
                 # Automatically calculate MAE/MFE only for trades closed after
                 # Stage E activation. Historical trades are handled explicitly by

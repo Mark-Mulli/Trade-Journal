@@ -143,14 +143,37 @@ def sync_positions_and_events(conn, account_login: int) -> Dict[int, object]:
 
         if prev is None:
             _insert_position_event(conn, account_login, position_id, "OPEN", curr, "")
+            # If the logger first sees the position with protection/target already
+            # attached, record those first observed values explicitly as well.
+            if curr["sl"] > 0:
+                _insert_position_event(conn, account_login, position_id, "SL_SET", curr, f'0.0 -> {curr["sl"]}')
+            if curr["tp"] > 0:
+                _insert_position_event(conn, account_login, position_id, "TP_SET", curr, f'0.0 -> {curr["tp"]}')
         else:
             changes = []
             if abs(curr["volume"] - float(prev["volume"])) > 1e-12:
                 changes.append(("VOLUME_CHANGE", f'{prev["volume"]} -> {curr["volume"]}'))
-            if abs(curr["sl"] - float(prev["sl"])) > 1e-12:
-                changes.append(("SL_CHANGE", f'{prev["sl"]} -> {curr["sl"]}'))
-            if abs(curr["tp"] - float(prev["tp"])) > 1e-12:
-                changes.append(("TP_CHANGE", f'{prev["tp"]} -> {curr["tp"]}'))
+
+            prev_sl = float(prev["sl"] or 0.0)
+            if abs(curr["sl"] - prev_sl) > 1e-12:
+                if prev_sl <= 0 < curr["sl"]:
+                    event = "SL_SET"
+                elif prev_sl > 0 and curr["sl"] <= 0:
+                    event = "SL_REMOVED"
+                else:
+                    event = "SL_CHANGE"
+                changes.append((event, f'{prev_sl} -> {curr["sl"]}'))
+
+            prev_tp = float(prev["tp"] or 0.0)
+            if abs(curr["tp"] - prev_tp) > 1e-12:
+                if prev_tp <= 0 < curr["tp"]:
+                    event = "TP_SET"
+                elif prev_tp > 0 and curr["tp"] <= 0:
+                    event = "TP_REMOVED"
+                else:
+                    event = "TP_CHANGE"
+                changes.append((event, f'{prev_tp} -> {curr["tp"]}'))
+
             if abs(curr["price_open"] - float(prev["price_open"])) > 1e-12:
                 changes.append(("ENTRY_PRICE_CHANGE", f'{prev["price_open"]} -> {curr["price_open"]}'))
             for event_type, details in changes:
@@ -224,7 +247,58 @@ def _weighted_average(rows: Iterable, price_key="price", volume_key="volume"):
     return sum(float(r[price_key]) * float(r[volume_key]) for r in rows) / total_volume
 
 
-def rebuild_trades(conn, account_login: int, open_position_ids) -> int:
+def _first_nonzero_event_value(conn, account_login: int, position_id: int, column: str):
+    if column not in {"sl", "tp"}:
+        raise ValueError("column must be sl or tp")
+    row = conn.execute(
+        f"""
+        SELECT {column} AS value, event_time_msc
+        FROM position_events
+        WHERE account_login=? AND position_id=? AND COALESCE({column}, 0) > 0
+        ORDER BY event_time_msc, event_id
+        LIMIT 1
+        """,
+        (account_login, position_id),
+    ).fetchone()
+    if not row:
+        return None, None
+    return float(row["value"]), int(row["event_time_msc"])
+
+
+def _resolve_initial_level(
+    conn, account_login: int, position_id: int, existing_value, existing_time,
+    entry_value: float, entry_time_msc: int, live_position, field: str,
+):
+    """Return the immutable first non-zero SL/TP and its best-known set time/source."""
+    if existing_value is not None and float(existing_value) > 0:
+        return float(existing_value), existing_time, "LOCKED_EXISTING"
+
+    if entry_value and float(entry_value) > 0:
+        return float(entry_value), int(entry_time_msc), "ENTRY_DEAL"
+
+    event_value, event_time = _first_nonzero_event_value(
+        conn, account_login, position_id, field
+    )
+    if event_value is not None:
+        return event_value, event_time, "POSITION_EVENT"
+
+    if live_position is not None:
+        live_value = float(getattr(live_position, field, 0.0) or 0.0)
+        if live_value > 0:
+            observed_time = int(
+                getattr(
+                    live_position,
+                    "time_update_msc",
+                    int(getattr(live_position, "time_update", 0) or 0) * 1000,
+                )
+                or now_msc()
+            )
+            return live_value, observed_time, "LIVE_POSITION_FIRST_OBSERVED"
+
+    return 0.0, existing_time, None
+
+
+def rebuild_trades(conn, account_login: int, open_positions) -> int:
     position_rows = conn.execute(
         """
         SELECT DISTINCT position_id
@@ -235,7 +309,13 @@ def rebuild_trades(conn, account_login: int, open_position_ids) -> int:
     ).fetchall()
 
     updated = 0
-    open_ids = set(int(x) for x in open_position_ids)
+    if hasattr(open_positions, "keys"):
+        current_positions = {int(k): v for k, v in open_positions.items()}
+        open_ids = set(current_positions)
+    else:
+        # Backwards-compatible fallback for callers that only provide IDs.
+        current_positions = {}
+        open_ids = set(int(x) for x in open_positions)
     current_now_msc = now_msc()
 
     for pr in position_rows:
@@ -274,8 +354,8 @@ def rebuild_trades(conn, account_login: int, open_position_ids) -> int:
         closed_volume = sum(float(r["volume"]) for r in exit_rows)
         entry_time = min(int(r["time_msc"]) for r in entry_rows)
         exit_time = max((int(r["time_msc"]) for r in exit_rows), default=None)
-        initial_sl = float(first_entry["sl"] or 0.0)
-        initial_tp = float(first_entry["tp"] or 0.0)
+        entry_deal_sl = float(first_entry["sl"] or 0.0)
+        entry_deal_tp = float(first_entry["tp"] or 0.0)
 
         gross_pnl = sum(float(r["profit"] or 0.0) for r in rows)
         commission = sum(float(r["commission"] or 0.0) for r in rows)
@@ -290,7 +370,9 @@ def rebuild_trades(conn, account_login: int, open_position_ids) -> int:
 
         existing = conn.execute(
             """
-            SELECT risk_amount, planned_reward_amount, planned_rr, risk_status,
+            SELECT initial_sl, initial_tp, initial_sl_set_at_msc, initial_tp_set_at_msc,
+                   initial_sl_source, initial_tp_source,
+                   risk_amount, planned_reward_amount, planned_rr, risk_status,
                    risk_calculated_at_msc, risk_calc_context
             FROM trades
             WHERE account_login=? AND position_id=?
@@ -298,25 +380,53 @@ def rebuild_trades(conn, account_login: int, open_position_ids) -> int:
             (account_login, position_id),
         ).fetchone()
 
+        live_position = current_positions.get(position_id)
+        initial_sl, initial_sl_set_at, initial_sl_source = _resolve_initial_level(
+            conn, account_login, position_id,
+            existing["initial_sl"] if existing else None,
+            existing["initial_sl_set_at_msc"] if existing else None,
+            entry_deal_sl, entry_time, live_position, "sl",
+        )
+        initial_tp, initial_tp_set_at, initial_tp_source = _resolve_initial_level(
+            conn, account_login, position_id,
+            existing["initial_tp"] if existing else None,
+            existing["initial_tp_set_at_msc"] if existing else None,
+            entry_deal_tp, entry_time, live_position, "tp",
+        )
+
         existing_risk = float(existing["risk_amount"]) if existing and existing["risk_amount"] is not None else None
+        existing_reward = existing["planned_reward_amount"] if existing else None
+        existing_rr = existing["planned_rr"] if existing else None
+
+        # Re-run the read-only calculator until the first SL is available. If risk
+        # was already frozen but the TP was added later, only fill the missing
+        # reward/R:R fields and keep the original risk unchanged.
+        risk = calculate_initial_risk_reward(
+            mt5,
+            symbol=symbol,
+            direction=direction,
+            volume=entry_volume,
+            entry_price=float(entry_price),
+            initial_sl=initial_sl,
+            initial_tp=initial_tp,
+            multi_entry=len(entry_rows) > 1,
+        )
+
         if existing_risk is not None:
             risk_amount = existing_risk
-            planned_reward_amount = existing["planned_reward_amount"]
-            planned_rr = existing["planned_rr"]
+            planned_reward_amount = existing_reward
+            planned_rr = existing_rr
             risk_status = existing["risk_status"]
             risk_calculated_at = existing["risk_calculated_at_msc"]
             risk_calc_context = existing["risk_calc_context"]
+
+            if planned_reward_amount is None and risk.get("planned_reward_amount") is not None:
+                planned_reward_amount = risk["planned_reward_amount"]
+                planned_rr = (
+                    float(planned_reward_amount) / float(risk_amount)
+                    if risk_amount not in (None, 0) else None
+                )
         else:
-            risk = calculate_initial_risk_reward(
-                mt5,
-                symbol=symbol,
-                direction=direction,
-                volume=entry_volume,
-                entry_price=float(entry_price),
-                initial_sl=initial_sl,
-                initial_tp=initial_tp,
-                multi_entry=len(entry_rows) > 1,
-            )
             risk_amount = risk["risk_amount"]
             planned_reward_amount = risk["planned_reward_amount"]
             planned_rr = risk["planned_rr"]
@@ -347,6 +457,8 @@ def rebuild_trades(conn, account_login: int, open_position_ids) -> int:
                 account_login, position_id, symbol, direction,
                 entry_time_msc, exit_time_msc, entry_price, exit_price,
                 entry_volume, closed_volume, initial_sl, initial_tp,
+                initial_sl_set_at_msc, initial_tp_set_at_msc,
+                initial_sl_source, initial_tp_source,
                 gross_pnl, commission, swap, fee, net_pnl, status,
                 risk_amount, planned_reward_amount, planned_rr, r_multiple,
                 risk_status, risk_calculated_at_msc, risk_calc_context,
@@ -355,7 +467,7 @@ def rebuild_trades(conn, account_login: int, open_position_ids) -> int:
                 entry_year, entry_hour, entry_session, outcome,
                 analytics_timezone, session_timezone, updated_at_msc
             ) VALUES (
-                ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
                 ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
             )
             ON CONFLICT(account_login, position_id) DO UPDATE SET
@@ -367,8 +479,18 @@ def rebuild_trades(conn, account_login: int, open_position_ids) -> int:
                 exit_price=excluded.exit_price,
                 entry_volume=excluded.entry_volume,
                 closed_volume=excluded.closed_volume,
-                initial_sl=excluded.initial_sl,
-                initial_tp=excluded.initial_tp,
+                initial_sl=CASE
+                    WHEN COALESCE(trades.initial_sl,0) > 0 THEN trades.initial_sl
+                    ELSE excluded.initial_sl
+                END,
+                initial_tp=CASE
+                    WHEN COALESCE(trades.initial_tp,0) > 0 THEN trades.initial_tp
+                    ELSE excluded.initial_tp
+                END,
+                initial_sl_set_at_msc=COALESCE(trades.initial_sl_set_at_msc, excluded.initial_sl_set_at_msc),
+                initial_tp_set_at_msc=COALESCE(trades.initial_tp_set_at_msc, excluded.initial_tp_set_at_msc),
+                initial_sl_source=COALESCE(trades.initial_sl_source, excluded.initial_sl_source),
+                initial_tp_source=COALESCE(trades.initial_tp_source, excluded.initial_tp_source),
                 gross_pnl=excluded.gross_pnl,
                 commission=excluded.commission,
                 swap=excluded.swap,
@@ -403,6 +525,8 @@ def rebuild_trades(conn, account_login: int, open_position_ids) -> int:
                 account_login, position_id, symbol, direction,
                 entry_time, exit_time, entry_price, exit_price,
                 entry_volume, closed_volume, initial_sl, initial_tp,
+                initial_sl_set_at, initial_tp_set_at,
+                initial_sl_source, initial_tp_source,
                 gross_pnl, commission, swap, fee, net_pnl, status,
                 risk_amount, planned_reward_amount, planned_rr, r_multiple,
                 risk_status, risk_calculated_at, risk_calc_context,
@@ -446,9 +570,8 @@ def export_csvs(conn, account_login: int, export_dir) -> None:
     }
     for name, query in tables.items():
         df = pd.read_sql_query(query, conn, params=(account_login,))
-        for col in [c for c in df.columns if c.endswith("_msc")]:
-            if not df.empty:
-                df[col.replace("_msc", "_datetime_utc")] = pd.to_datetime(
-                    df[col], unit="ms", utc=True, errors="coerce"
-                )
+        for col in [c for c in df.columns if c.endswith("_msc")]:    
+            df[col.replace("_msc", "_datetime_utc")] = pd.to_datetime(
+                df[col], unit="ms", utc=True, errors="coerce"
+            )
         df.to_csv(export_dir / f"{name}.csv", index=False)

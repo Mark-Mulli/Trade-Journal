@@ -59,6 +59,16 @@ STAGE_E_TRADE_COLUMNS = {
     "excursion_calc_context": "TEXT",
 }
 
+# Patch columns are deliberately ensured AFTER Stage E so an upgrade appends
+# them to the end of the existing trades table. This preserves prior Stage C/E
+# column positions for users whose Excel queries rely on the old export layout.
+STAGE_E_SLTP_PATCH_COLUMNS = {
+    "initial_sl_set_at_msc": "INTEGER",
+    "initial_tp_set_at_msc": "INTEGER",
+    "initial_sl_source": "TEXT",
+    "initial_tp_source": "TEXT",
+}
+
 
 def connect(db_path: Path) -> sqlite3.Connection:
     db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -230,6 +240,7 @@ def init_db(conn: sqlite3.Connection) -> None:
     _ensure_columns(conn, "trades", STAGE_B_TRADE_COLUMNS)
     _ensure_columns(conn, "trades", STAGE_D_TRADE_COLUMNS)
     _ensure_columns(conn, "trades", STAGE_E_TRADE_COLUMNS)
+    _ensure_columns(conn, "trades", STAGE_E_SLTP_PATCH_COLUMNS)
     conn.commit()
 
 
