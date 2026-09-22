@@ -51,7 +51,7 @@ The project reads MT5 account, position, deal, and tick data. It does **not** co
 
 At a high level:
 
-![Stage E Architecture](architecture_stage_e.svg)
+![Stage E Architecture](docs/architecture_stage_e.svg)
 
 <!-- ```text
 Trader
