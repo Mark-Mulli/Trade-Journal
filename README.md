@@ -3,11 +3,9 @@
 > **Current implementation**  
 > A read-only MetaTrader 5 trade-journaling, annotation, analytics, and research platform built with Python, SQLite, Excel, and MT5 historical tick data.
 
-![Stage E Architecture](docs/architecture_stage_e.svg)
-
 ## 1. Overview
 
-This project converts actual MetaTrader 5 trading activity into a durable research database and reporting workflow. The broker account remains the source of executed trading activity, SQLite is the system of record, and Excel/Power BI are reporting layers rather than primary data stores.
+This project converts actual MetaTrader 5 trading activity into a durable research database and reporting workflow. The broker account remains the source of executed trading activity, SQLite is the system of record, and Excel is the reporting layer rather than the v primary data store.
 
 The platform currently covers **Stages A–E**:
 
@@ -51,14 +49,11 @@ The project reads MT5 account, position, deal, and tick data. It does **not** co
 
 ## 3. System architecture
 
-The detailed architectural diagram is available here:
-
-- [`docs/architecture_stage_e.svg`](docs/architecture_stage_e.svg) — scalable vector version
-- [`docs/architecture_stage_e.png`](docs/architecture_stage_e.png) — PNG version
-
 At a high level:
 
-```text
+![Stage E Architecture](architecture_stage_e.svg)
+
+<!-- ```text
 Trader
   │ manually executes trades
   ▼
@@ -84,7 +79,7 @@ MetaTrader 5 Terminal
   │             └── Power BI
   │
   └── historical Bid/Ask ticks ──► Stage E excursion engine
-```
+``` -->
 
 ---
 
@@ -100,7 +95,7 @@ MetaTrader 5 Terminal
 | **Tkinter** | Local Stage D annotation application |
 | **Pillow** | Screenshot capture/management |
 | **CSV** | Stable interchange layer for Excel/Power BI |
-| **Excel Power Query / Power BI** | Reporting and dashboard layer |
+| **Excel Power Query** | Reporting and dashboard layer |
 
 Current Python dependencies are declared in `requirements.txt`:
 
@@ -113,61 +108,11 @@ Pillow
 
 ---
 
-## 5. Project structure
 
-A typical Stage E installation looks like this:
 
-```text
-mt5_trade_journal_stage_e/
-│
-├── main.py                    # Main live logger / orchestrator
-├── journal.py                 # MT5 sync, trade rebuild, position events, exports
-├── database.py                # SQLite schema, migrations, connection settings
-├── config.py                  # Runtime and analytics configuration
-│
-├── analytics.py               # Stage B risk/R/time/session analytics
-├── excursions.py              # Stage E tick-based MAE/MFE calculations
-├── advanced_reports.py        # Stage E aggregate and rolling reports
-│
-├── annotate.py                # Stage D desktop annotation UI
-├── annotations.py             # Annotation and screenshot persistence logic
-│
-├── backfill_excursions.py     # Historical MAE/MFE backfill utility
-├── generate_reports.py        # Manual advanced-report generation
-├── inspect_db.py              # Database inspection utility
-├── stage_b_check.py           # Stage B validation utility
-├── stage_d_check.py           # Stage D validation utility
-├── stage_e_check.py           # Stage E validation utility
-│
-├── run_logger.bat             # Windows convenience launcher
-├── run_annotation_app.bat     # Windows annotation-app launcher
-├── requirements.txt
-├── README.md
-│
-├── data/
-│   └── trade_journal.db       # MASTER DATABASE
-│
-├── exports/                   # Rebuildable reporting files
-│   ├── trades.csv
-│   ├── executions.csv
-│   ├── position_events.csv
-│   ├── account_snapshots.csv
-│   ├── performance_summary.csv
-│   ├── rolling_performance.csv
-│   └── analysis_by_*.csv
-│
-├── screenshots/               # Trade images, organized by account/position
-│
-└── reports/                   # Optional Excel / Power BI reporting assets
-```
+## 5. Data model
 
-The `data`, `exports`, `screenshots`, and `reports` folders are runtime data directories and may not exist in a clean source package until the application has been run.
-
----
-
-## 6. Data model
-
-### 6.1 `executions`
+### 5.1 `executions`
 
 Stores raw MT5 deals/executions. The composite key `(account_login, deal_ticket)` prevents duplicate ingestion when the logger deliberately rereads overlapping history windows.
 
@@ -191,7 +136,7 @@ SL / TP
 magic / reason / comment
 ```
 
-### 6.2 `position_events`
+### 5.2 `position_events`
 
 Stores observed lifecycle changes such as:
 
@@ -206,11 +151,11 @@ ENTRY_PRICE_CHANGE
 
 This gives a useful audit trail beyond the final completed trade record.
 
-### 6.3 `position_state`
+### 5.3 `position_state`
 
 Stores the latest observed state of each open MT5 position and supports change detection between polling cycles.
 
-### 6.4 `trades`
+### 5.4 `trades`
 
 The central one-row-per-position analytical table. It combines:
 
@@ -272,7 +217,7 @@ tick count
 excursion status/context
 ```
 
-### 6.5 `account_snapshots`
+### 5.5 `account_snapshots`
 
 Periodically stores account-level values:
 
@@ -286,21 +231,21 @@ floating profit
 
 These snapshots support sampled account-equity and drawdown analysis.
 
-### 6.6 `trade_annotation_history`
+### 5.6 `trade_annotation_history`
 
 Stores a revision every time the annotation app saves a trade. This preserves entry-time thinking and subsequent post-trade review instead of replacing earlier context.
 
-### 6.7 `trade_screenshots`
+### 5.7 `trade_screenshots`
 
 Stores screenshot metadata, captions, source, primary-image status, and file paths. Image files themselves live under `screenshots/`.
 
-### 6.8 `sync_state`
+### 5.8 `sync_state`
 
 Stores internal checkpoints and feature activation markers used by the logger, including Stage E activation state.
 
 ---
 
-## 7. Stage-by-stage implementation
+## 6. Stage-by-stage implementation
 
 ### Stage A — Reliable broker capture
 
@@ -402,19 +347,19 @@ It also produces rolling and segmented research outputs.
 
 ---
 
-## 8. Runtime workflow
+## 7. Runtime workflow
 
-### 8.1 Start MetaTrader 5
+### 7.1 Start MetaTrader 5
 
 Open MT5 and log into the account being journaled.
 
-### 8.2 Activate the Python environment
+### 7.2 Activate the Python environment
 
 ```powershell
 .\.venv\Scripts\Activate.ps1
 ```
 
-### 8.3 Start the logger
+### 7.3 Start the logger
 
 ```powershell
 python main.py
@@ -437,7 +382,7 @@ The logger continuously:
 7. Regenerates base CSV exports.
 8. Regenerates advanced reports periodically.
 
-### 8.4 Start the annotation application
+### 7.4 Start the annotation application
 
 In a second process:
 
@@ -453,107 +398,13 @@ run_annotation_app.bat
 
 Use this application to add trader-owned context without editing imported Excel data.
 
-### 8.5 Refresh Excel / Power BI
+### 7.5 Refresh Excel 
 
-Excel Power Query and Power BI can read the generated CSV files. SQLite remains the master record.
-
----
-
-## 9. Stage E advanced outputs
-
-The reporting engine writes the following files under `exports/`:
-
-```text
-performance_summary.csv
-rolling_performance.csv
-analysis_by_strategy.csv
-analysis_by_setup.csv
-analysis_by_symbol.csv
-analysis_by_entry_session.csv
-analysis_by_entry_weekday.csv
-analysis_by_direction.csv
-analysis_by_grade.csv
-analysis_by_emotion.csv
-analysis_by_rule_violation.csv
-analysis_by_rule_violation_type.csv
-analysis_by_entry_date.csv
-analysis_by_entry_month.csv
-analysis_by_entry_year.csv
-```
-
-### `performance_summary.csv`
-
-Contains whole-sample measures such as:
-
-- Trades / wins / losses / breakeven.
-- Win rate.
-- Net and average P&L.
-- Average / median R.
-- Profit factor.
-- Average winner and loser R.
-- Payoff ratio.
-- Holding time.
-- Average planned R:R.
-- Average MAE/MFE.
-- Capture efficiency.
-- Risk used.
-- Closed-trade drawdown.
-- Sampled-equity drawdown.
-- Longest winning and losing streaks.
-- Excursion coverage.
-
-### `rolling_performance.csv`
-
-Produces a chronological closed-trade series including:
-
-- Cumulative P&L and R.
-- Closed-trade drawdown.
-- Rolling average R.
-- Rolling win rate.
-- Rolling profit factor.
-- Current win/loss streak lengths.
-
-The default rolling window is controlled by:
-
-```python
-ROLLING_WINDOW_TRADES = 20
-```
+Excel Power Query can read the generated CSV files. SQLite remains the master record.
 
 ---
 
-## 10. MAE/MFE backfill
-
-Automatic Stage E excursion processing is intentionally limited to trades that close after Stage E is activated. Historical trades can be processed explicitly to avoid overwhelming the live logger with large tick-history requests.
-
-Start conservatively:
-
-```powershell
-python backfill_excursions.py --days 7 --limit 20
-```
-
-Then increase the range if the broker supplies the required history:
-
-```powershell
-python backfill_excursions.py --days 30 --limit 100
-```
-
-For a larger historical run:
-
-```powershell
-python backfill_excursions.py --days 365 --limit 1000
-```
-
-To intentionally recalculate already processed trades:
-
-```powershell
-python backfill_excursions.py --days 30 --limit 100 --recalculate
-```
-
-Tick-history availability depends on the MT5 broker/server and local terminal history.
-
----
-
-## 11. Configuration
+## 8. Configuration
 
 Primary settings live in `config.py`.
 
@@ -600,7 +451,7 @@ MIN_SAMPLE_TRADES = 20
 
 ---
 
-## 12. Database reliability
+## 9. Database reliability
 
 The SQLite connection enables:
 
@@ -626,7 +477,7 @@ The `exports/` directory is rebuildable and should not be treated as the system 
 
 ---
 
-## 13. Recommended daily workflow
+## 10. Recommended daily workflow
 
 ### When entering a trade
 
@@ -657,7 +508,7 @@ The logger continues recording position-state changes and broker executions. Opt
 
 ---
 
-## 14. Key analytical definitions
+## 11. Key analytical definitions
 
 ### R-multiple
 
@@ -697,7 +548,7 @@ A value above 100% indicates that observed price travelled beyond the original 1
 
 ---
 
-## 15. Known limitations
+## 12. Known limitations
 
 ### Hedging vs. netting accounts
 
@@ -731,7 +582,7 @@ Stage E provides descriptive and rolling analysis. Confidence intervals, bootstr
 
 ---
 
-## 16. Validation and troubleshooting utilities
+## 13. Validation and troubleshooting utilities
 
 ### Validate Stage B metrics
 
@@ -788,7 +639,7 @@ If MAE/MFE is missing:
 
 ---
 
-## 17. Security and operational notes
+## 14. Security and operational notes
 
 - Do not hard-code broker passwords into project source files.
 - Prefer allowing the already authenticated MT5 desktop terminal to provide the account session.
@@ -799,7 +650,7 @@ If MAE/MFE is missing:
 
 ---
 
-## 18. Current maturity and future roadmap
+## 15. Current maturity and future roadmap
 
 Stage E represents a complete usable trade-journal and descriptive performance-research foundation.
 
@@ -816,7 +667,7 @@ These later stages are intentionally separate from the Stage A–E capture found
 
 ---
 
-## 19. Operating summary
+## 16. Operating summary
 
 For normal day-to-day use:
 
@@ -839,6 +690,6 @@ Then trade manually in MT5, annotate relevant trades, and refresh Excel/Power BI
 
 ---
 
-## 20. Disclaimer
+## 17. Disclaimer
 
 This software is a personal trading-journal and research system. It does not provide investment advice, guarantee profitability, or automatically execute trades. Historical performance statistics and backfilled analytics do not guarantee future results.
